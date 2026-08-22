@@ -35,7 +35,6 @@ required = [
     root / 'README.md',
     root / 'CHANGELOG.md',
     root / 'CONTRIBUTING.md',
-    root / 'SECURITY.md',
     root / 'build.yaml',
     root / 'manifest.json',
     root / 'Jellyfin.Plugin.PlexBridge' / 'Plugin.cs',
