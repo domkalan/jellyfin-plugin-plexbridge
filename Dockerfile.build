@@ -1,0 +1,16 @@
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends zip \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+COPY . .
+
+ARG JELLYFIN_VERSION=10.11.11
+ARG PLUGIN_VERSION=1.0.3
+RUN chmod +x scripts/package.sh \
+    && JELLYFIN_VERSION="$JELLYFIN_VERSION" scripts/package.sh "$PLUGIN_VERSION"
+
+FROM scratch AS export
+COPY --from=build /src/dist/ /

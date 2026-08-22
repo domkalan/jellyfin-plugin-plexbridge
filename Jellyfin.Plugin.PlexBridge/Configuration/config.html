@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Plex Bridge</title>
+</head>
+<body>
+<div id="PlexBridgeConfigPage" data-role="page" class="page type-interior pluginConfigurationPage" data-require="emby-input,emby-button,emby-checkbox">
+    <div data-role="content">
+        <div class="content-primary">
+            <form id="PlexBridgeConfigForm">
+                <h1>Plex Bridge</h1>
+                <p>Expose movie and TV libraries from a remote Plex Media Server as a Jellyfin Channel. Plex credentials remain on this Jellyfin server.</p>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="Enabled" type="checkbox" is="emby-checkbox" />
+                        <span>Enable Plex Bridge</span>
+                    </label>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="PlexServerUrl">Plex server URL</label>
+                    <input id="PlexServerUrl" is="emby-input" type="url" placeholder="https://example.direct.plex.tv:32400" />
+                    <div class="fieldDescription">Use a URL for the shared Plex Media Server that this Jellyfin server can reach.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="PlexToken">Plex access token</label>
+                    <input id="PlexToken" is="emby-input" type="password" autocomplete="new-password" />
+                    <div class="fieldDescription">Stored in Jellyfin's plugin configuration and sent only from the server to Plex. It is never inserted into client playback URLs.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="InternalJellyfinUrl">Internal Jellyfin URL</label>
+                    <input id="InternalJellyfinUrl" is="emby-input" type="url" placeholder="http://127.0.0.1:8096" />
+                    <div class="fieldDescription">URL the Jellyfin server/FFmpeg can use to reach its own Plex Bridge proxy. Include your Jellyfin Base URL path if you use one.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="SelectedLibraryKeys">Plex library section keys</label>
+                    <input id="SelectedLibraryKeys" is="emby-input" type="text" placeholder="1, 4, 7" />
+                    <div class="fieldDescription">Optional comma-separated Plex section keys. Leave empty to expose every movie and TV section shared with this Plex token.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="AllowedUserIds">Allowed Jellyfin user IDs</label>
+                    <input id="AllowedUserIds" is="emby-input" type="text" placeholder="user-guid-1, user-guid-2" />
+                    <div class="fieldDescription">Optional comma-separated Jellyfin user GUIDs. Leave empty to allow all Jellyfin users to browse this Channel.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="PageSize">Plex fetch batch size</label>
+                    <input id="PageSize" is="emby-input" type="number" min="10" max="200" step="1" />
+                    <div class="fieldDescription">Number of Plex records fetched per upstream request. Jellyfin 10.11 requests complete Channel folders, so Plex Bridge automatically walks all batches.</div>
+                </div>
+
+                <div class="inputContainer">
+                    <label class="inputLabel inputLabelUnfocused" for="SignedUrlLifetimeMinutes">Signed playback URL lifetime (minutes)</label>
+                    <input id="SignedUrlLifetimeMinutes" is="emby-input" type="number" min="30" max="10080" step="30" />
+                    <div class="fieldDescription">Default 1440 (24 hours). A signed URL authorizes only one Plex item/version and contains no Plex token.</div>
+                </div>
+
+                <div class="checkboxContainer checkboxContainer-withDescription">
+                    <label class="emby-checkbox-label">
+                        <input id="EnableImages" type="checkbox" is="emby-checkbox" />
+                        <span>Proxy Plex artwork</span>
+                    </label>
+                </div>
+
+                <div>
+                    <button is="emby-button" type="submit" class="raised button-submit block emby-button"><span>Save</span></button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+<script type="text/javascript">
+(function () {
+    const pluginId = '978ac9fe-8d18-4d26-a432-0d3150143c98';
+    const page = document.querySelector('#PlexBridgeConfigPage');
+
+    function load() {
+        Dashboard.showLoadingMsg();
+        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+            document.querySelector('#Enabled').checked = !!config.Enabled;
+            document.querySelector('#PlexServerUrl').value = config.PlexServerUrl || '';
+            document.querySelector('#PlexToken').value = config.PlexToken || '';
+            document.querySelector('#InternalJellyfinUrl').value = config.InternalJellyfinUrl || 'http://127.0.0.1:8096';
+            document.querySelector('#SelectedLibraryKeys').value = config.SelectedLibraryKeys || '';
+            document.querySelector('#AllowedUserIds').value = config.AllowedUserIds || '';
+            document.querySelector('#PageSize').value = config.PageSize || 50;
+            document.querySelector('#SignedUrlLifetimeMinutes').value = config.SignedUrlLifetimeMinutes || 1440;
+            document.querySelector('#EnableImages').checked = config.EnableImages !== false;
+            Dashboard.hideLoadingMsg();
+        }).catch(function () { Dashboard.hideLoadingMsg(); });
+    }
+
+    page.addEventListener('pageshow', load);
+    document.querySelector('#PlexBridgeConfigForm').addEventListener('submit', function (event) {
+        event.preventDefault();
+        Dashboard.showLoadingMsg();
+        ApiClient.getPluginConfiguration(pluginId).then(function (config) {
+            config.Enabled = document.querySelector('#Enabled').checked;
+            config.PlexServerUrl = document.querySelector('#PlexServerUrl').value.trim();
+            config.PlexToken = document.querySelector('#PlexToken').value.trim();
+            config.InternalJellyfinUrl = document.querySelector('#InternalJellyfinUrl').value.trim();
+            config.SelectedLibraryKeys = document.querySelector('#SelectedLibraryKeys').value.trim();
+            config.AllowedUserIds = document.querySelector('#AllowedUserIds').value.trim();
+            config.PageSize = parseInt(document.querySelector('#PageSize').value, 10) || 50;
+            config.SignedUrlLifetimeMinutes = parseInt(document.querySelector('#SignedUrlLifetimeMinutes').value, 10) || 1440;
+            config.EnableImages = document.querySelector('#EnableImages').checked;
+            return ApiClient.updatePluginConfiguration(pluginId, config);
+        }).then(function (result) {
+            Dashboard.processPluginConfigurationUpdateResult(result);
+        }).catch(function () {
+            Dashboard.hideLoadingMsg();
+        });
+        return false;
+    });
+})();
+</script>
+</div>
+</body>
+</html>

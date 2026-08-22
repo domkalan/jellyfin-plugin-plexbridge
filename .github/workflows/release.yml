@@ -1,0 +1,101 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      JELLYFIN_VERSION: '10.11.11'
+
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tag must be vMAJOR.MINOR.PATCH" >&2
+            exit 1
+          fi
+          SOURCE_VERSION="$(tr -d '[:space:]' < VERSION)"
+          if [[ "$VERSION" != "$SOURCE_VERSION" ]]; then
+            echo "Tag version $VERSION does not match VERSION file $SOURCE_VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "asset=PlexBridge-${VERSION}-jellyfin-${JELLYFIN_VERSION}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Validate source
+        run: ./scripts/validate-source.sh
+
+      - name: Build release package
+        run: ./scripts/package.sh '${{ steps.version.outputs.version }}'
+
+      - name: Extract release notes
+        run: |
+          python3 scripts/release-notes.py '${{ steps.version.outputs.version }}' > release-notes.md
+          cat release-notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "dist/${{ steps.version.outputs.asset }}" \
+            --title "Plex Bridge ${{ steps.version.outputs.version }}" \
+            --notes-file release-notes.md
+
+      - name: Calculate Jellyfin checksum
+        id: checksum
+        shell: bash
+        run: |
+          CHECKSUM="$(md5sum "dist/${{ steps.version.outputs.asset }}" | awk '{print $1}')"
+          echo "checksum=$CHECKSUM" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout default branch for manifest update
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: repo-main
+
+      - name: Update Jellyfin repository manifest
+        run: |
+          python3 scripts/update-manifest.py \
+            --manifest repo-main/manifest.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --version '${{ steps.version.outputs.version }}' \
+            --target-abi "${JELLYFIN_VERSION}.0" \
+            --asset '${{ steps.version.outputs.asset }}' \
+            --checksum '${{ steps.checksum.outputs.checksum }}' \
+            --changelog-file release-notes.md
+
+      - name: Commit manifest
+        working-directory: repo-main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add manifest.json
+          if git diff --cached --quiet; then
+            echo 'manifest.json already up to date'
+            exit 0
+          fi
+          git commit -m 'chore: publish Plex Bridge ${{ steps.version.outputs.version }}'
+          git push origin HEAD:${{ github.event.repository.default_branch }}

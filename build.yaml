@@ -1,0 +1,19 @@
+---
+name: "Plex Bridge"
+guid: "978ac9fe-8d18-4d26-a432-0d3150143c98"
+version: "1.0.3.0"
+targetAbi: "10.11.11.0"
+framework: "net9.0"
+owner: "Plex Bridge contributors"
+overview: "Browse and stream remote Plex libraries through Jellyfin"
+description: >-
+  Exposes remote Plex movie and TV libraries as a Jellyfin Channel while keeping
+  Plex credentials server-side behind signed proxy URLs.
+category: "Channels"
+artifacts:
+  - "Jellyfin.Plugin.PlexBridge.dll"
+changelog: |-
+  - Map Plex video/audio/subtitle stream metadata into Jellyfin MediaStream entries.
+  - Fix HLS playback by using deterministic GUID media-source IDs.
+  - Fetch complete Plex folders instead of stopping at the first 50 items.
+  - Add proxy diagnostics for upstream Plex HTTP status and range requests.

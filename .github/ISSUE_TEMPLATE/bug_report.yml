@@ -1,0 +1,58 @@
+name: Bug report
+description: Report a reproducible Plex Bridge problem
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste Plex access tokens or unredacted signed Plex Bridge URLs.
+  - type: input
+    id: jellyfin
+    attributes:
+      label: Jellyfin version
+      placeholder: 10.11.11
+    validations:
+      required: true
+  - type: input
+    id: plugin
+    attributes:
+      label: Plex Bridge version
+      placeholder: 1.0.3
+    validations:
+      required: true
+  - type: dropdown
+    id: client
+    attributes:
+      label: Jellyfin client
+      options:
+        - Jellyfin Web
+        - Jellyfin Media Player/Desktop
+        - Android TV
+        - Android
+        - iOS / Swiftfin
+        - Roku
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Include reproduction steps and the expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant Jellyfin logs
+      description: Redact Plex tokens, private hostnames/IPs if desired, and signed query strings.
+      render: shell
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Credential check
+      options:
+        - label: I checked that this report does not contain a Plex access token.
+          required: true
