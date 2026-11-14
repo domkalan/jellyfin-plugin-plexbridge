@@ -22,5 +22,6 @@ public sealed class PluginServiceRegistrator : IPluginServiceRegistrator
 
         serviceCollection.AddSingleton<ProxyTokenService>();
         serviceCollection.AddSingleton<IChannel, PlexChannel>();
+        serviceCollection.AddHostedService<PlexPlaybackReporter>();
     }
 }

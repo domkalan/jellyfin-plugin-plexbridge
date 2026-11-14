@@ -8,6 +8,7 @@ All notable changes to Plex Bridge are documented here.
 - Add multiple configured Plex servers beneath the channel root.
 - Scope library browsing, metadata, caches, artwork proxying, media IDs, and signed playback URLs to the selected server.
 - Preserve the previous single-server configuration as a migration fallback.
+- Add optional per-server Plex playback timeline reporting.
 
 ## [1.0.3] - 2026-08-22
 

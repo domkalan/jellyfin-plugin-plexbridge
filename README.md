@@ -140,11 +140,11 @@ The resulting layout should be:
 The Channel is organized as `Plex Libraries` → server friendly name → Plex libraries. Add one JSON object per line in the plugin's **Plex servers** field:
 
 ```json
-{"name":"Living Room","url":"http://plex-one:32400","token":"SERVER_TOKEN","selectedLibraryKeys":"1,2"}
+{"name":"Living Room","url":"http://plex-one:32400","token":"SERVER_TOKEN","reportPlayback":true,"selectedLibraryKeys":"1,2"}
 {"name":"Office","url":"http://plex-two:32400","token":"SERVER_TOKEN_2"}
 ```
 
-Each server has its own URL, token, enabled state, and optional library allowlist. Tokens remain server-side and are never included in channel item or playback URLs. Existing single-server configuration values are still read as a legacy fallback.
+Each server has its own URL, token, enabled state, playback-reporting toggle, and optional library allowlist. When `reportPlayback` is enabled, Plex Bridge sends best-effort timeline updates to that Plex server. Tokens remain server-side and are never included in channel item or playback URLs. Existing single-server configuration values are still read as a legacy fallback; playback reporting is disabled for that legacy entry by default.
 
 ### Plex server URL
 

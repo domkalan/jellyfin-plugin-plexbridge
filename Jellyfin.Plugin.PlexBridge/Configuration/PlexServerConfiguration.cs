@@ -12,5 +12,7 @@ public sealed class PlexServerConfiguration
     public string Url { get; set; } = string.Empty;
     public string Token { get; set; } = string.Empty;
     public bool Enabled { get; set; } = true;
+    /// <summary>Gets or sets whether Jellyfin playback should be reported to Plex.</summary>
+    public bool ReportPlayback { get; set; }
     public string SelectedLibraryKeys { get; set; } = string.Empty;
 }

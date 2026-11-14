@@ -22,7 +22,7 @@
                 <div class="inputContainer">
                     <label class="inputLabel inputLabelUnfocused" for="ServersJson">Plex servers</label>
                     <textarea id="ServersJson" is="emby-input" rows="8" placeholder="One JSON object per line"></textarea>
-                    <div class="fieldDescription">Enter one JSON object per line with name, url, token, and optional selectedLibraryKeys. Example: {"name":"Living Room","url":"http://plex:32400","token":"TOKEN","selectedLibraryKeys":"1,2"}</div>
+                    <div class="fieldDescription">Enter one JSON object per line with name, url, token, optional selectedLibraryKeys, and reportPlayback. Example: {"name":"Living Room","url":"http://plex:32400","token":"TOKEN","reportPlayback":true,"selectedLibraryKeys":"1,2"}</div>
                 </div>
 
                 <div class="inputContainer">
@@ -95,7 +95,7 @@
         ApiClient.getPluginConfiguration(pluginId).then(function (config) {
             document.querySelector('#Enabled').checked = !!config.Enabled;
             const servers = Array.isArray(config.Servers) ? config.Servers : (config.PlexServerUrl ? [{ id: 'legacy', name: 'Plex Server', url: config.PlexServerUrl, token: config.PlexToken || '', enabled: config.Enabled !== false, selectedLibraryKeys: config.SelectedLibraryKeys || '' }] : []);
-            document.querySelector('#ServersJson').value = servers.map(function (server) { return JSON.stringify({ id: server.Id || server.id || '', name: server.Name || server.name || '', url: server.Url || server.url || '', token: server.Token || server.token || '', enabled: server.Enabled !== false && server.enabled !== false, selectedLibraryKeys: server.SelectedLibraryKeys || server.selectedLibraryKeys || '' }); }).join('\n');
+            document.querySelector('#ServersJson').value = servers.map(function (server) { return JSON.stringify({ id: server.Id || server.id || '', name: server.Name || server.name || '', url: server.Url || server.url || '', token: server.Token || server.token || '', enabled: server.Enabled !== false && server.enabled !== false, reportPlayback: server.ReportPlayback === true || server.reportPlayback === true, selectedLibraryKeys: server.SelectedLibraryKeys || server.selectedLibraryKeys || '' }); }).join('\n');
             document.querySelector('#PlexServerUrl').value = config.PlexServerUrl || '';
             document.querySelector('#PlexToken').value = config.PlexToken || '';
             document.querySelector('#InternalJellyfinUrl').value = config.InternalJellyfinUrl || 'http://127.0.0.1:8096';
@@ -116,7 +116,7 @@
             config.Enabled = document.querySelector('#Enabled').checked;
             config.Servers = document.querySelector('#ServersJson').value.split('\n').map(function (line) { return line.trim(); }).filter(Boolean).map(function (line) {
                 const value = JSON.parse(line);
-                return { Id: value.id || ('server-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)), Name: value.name || '', Url: value.url || '', Token: value.token || '', Enabled: value.enabled !== false, SelectedLibraryKeys: value.selectedLibraryKeys || '' };
+                return { Id: value.id || ('server-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)), Name: value.name || '', Url: value.url || '', Token: value.token || '', Enabled: value.enabled !== false, ReportPlayback: value.reportPlayback === true, SelectedLibraryKeys: value.selectedLibraryKeys || '' };
             });
             config.InternalJellyfinUrl = document.querySelector('#InternalJellyfinUrl').value.trim();
             config.SelectedLibraryKeys = document.querySelector('#SelectedLibraryKeys').value.trim();

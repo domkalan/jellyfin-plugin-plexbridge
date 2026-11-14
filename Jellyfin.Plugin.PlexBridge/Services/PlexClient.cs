@@ -148,6 +148,38 @@ public sealed class PlexClient
         return _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
+    /// <summary>
+    /// Reports the current playback position using Plex's client timeline endpoint.
+    /// This is deliberately best-effort; a reporting failure must never stop Jellyfin playback.
+    /// </summary>
+    public async Task<bool> ReportTimelineAsync(
+        PlexServerConfiguration server,
+        string ratingKey,
+        string state,
+        long positionMs,
+        long durationMs,
+        string sessionId,
+        string clientName,
+        CancellationToken cancellationToken)
+    {
+        var key = $"/library/metadata/{Uri.EscapeDataString(ratingKey)}";
+        var path = "/:/timeline"
+            + $"?ratingKey={Uri.EscapeDataString(ratingKey)}"
+            + $"&key={Uri.EscapeDataString(key)}"
+            + $"&state={Uri.EscapeDataString(state)}"
+            + $"&time={positionMs.ToString(CultureInfo.InvariantCulture)}"
+            + $"&duration={durationMs.ToString(CultureInfo.InvariantCulture)}"
+            + $"&session={Uri.EscapeDataString(sessionId)}"
+            + $"&clientIdentifier={Uri.EscapeDataString(ClientIdentifier)}"
+            + $"&product={Uri.EscapeDataString("Jellyfin Plex Bridge")}"
+            + $"&device={Uri.EscapeDataString(clientName)}"
+            + $"&protocol=http";
+
+        using var request = CreateRequest(server, HttpMethod.Get, path);
+        using var response = await _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+        return response.IsSuccessStatusCode;
+    }
+
     private async Task<PlexPage> GetPageAsync(PlexServerConfiguration server, string path, int startIndex, int limit, CancellationToken cancellationToken)
     {
         var document = await GetXmlAsync(server, path, startIndex, limit, cancellationToken).ConfigureAwait(false);
