@@ -2,6 +2,13 @@
 
 All notable changes to Plex Bridge are documented here.
 
+## [1.1.0] - Unreleased
+
+- Rename the channel root to `Plex Libraries`.
+- Add multiple configured Plex servers beneath the channel root.
+- Scope library browsing, metadata, caches, artwork proxying, media IDs, and signed playback URLs to the selected server.
+- Preserve the previous single-server configuration as a migration fallback.
+
 ## [1.0.3] - 2026-08-22
 
 - Map Plex elementary video, audio, and embedded subtitle metadata into Jellyfin `MediaStream` entries.

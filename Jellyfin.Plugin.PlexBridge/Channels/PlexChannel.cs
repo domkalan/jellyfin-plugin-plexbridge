@@ -34,13 +34,13 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
         _logger = logger;
     }
 
-    public string Name => "Plex Bridge";
+    public string Name => "Plex Libraries";
 
-    public string Description => "Movies and TV shared from a remote Plex Media Server.";
+    public string Description => "Movies and TV shared from connected Plex Media Servers.";
 
-    public string DataVersion => "4";
+    public string DataVersion => "5";
 
-    public string HomePageUrl => GetConfiguration().PlexServerUrl;
+    public string HomePageUrl => GetConfiguration().GetEffectiveServers().FirstOrDefault()?.Url ?? string.Empty;
 
     public ChannelParentalRating ParentalRating => default;
 
@@ -62,7 +62,7 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
 
     public bool IsEnabledFor(string userId)
     {
-        if (!_plexClient.IsConfigured)
+        if (!GetConfiguration().Enabled || !GetConfiguration().GetEffectiveServers().Any(_plexClient.IsConfigured))
         {
             return false;
         }
@@ -77,7 +77,7 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
 
     public async Task<ChannelItemResult> GetChannelItems(InternalChannelItemQuery query, CancellationToken cancellationToken)
     {
-        if (!_plexClient.IsConfigured)
+        if (!GetConfiguration().Enabled || !GetConfiguration().GetEffectiveServers().Any(_plexClient.IsConfigured))
         {
             return EmptyResult();
         }
@@ -89,7 +89,7 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
                 return await GetRootAsync(cancellationToken).ConfigureAwait(false);
             }
 
-            var parts = query.FolderId.Split(':', 3, StringSplitOptions.None);
+            var parts = query.FolderId.Split(':', StringSplitOptions.None);
             if (parts.Length < 2)
             {
                 return EmptyResult();
@@ -100,11 +100,16 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
                 ? Math.Clamp(query.Limit.Value, 1, GetPageSize())
                 : (int?)null;
 
+            if (parts[0] == "server" && parts.Length == 2)
+            {
+                return await GetServerLibrariesAsync(parts[1], start, limit, cancellationToken).ConfigureAwait(false);
+            }
+
             return parts[0] switch
             {
-                "lib" when parts.Length == 3 => await GetLibraryAsync(parts[1], parts[2], start, limit, cancellationToken).ConfigureAwait(false),
-                "show" => await GetChildrenAsync(parts[1], start, limit, cancellationToken).ConfigureAwait(false),
-                "season" => await GetChildrenAsync(parts[1], start, limit, cancellationToken).ConfigureAwait(false),
+                "lib" when parts.Length == 4 => await GetLibraryAsync(parts[1], parts[2], parts[3], start, limit, cancellationToken).ConfigureAwait(false),
+                "show" when parts.Length == 3 => await GetChildrenAsync(parts[1], parts[2], start, limit, cancellationToken).ConfigureAwait(false),
+                "season" when parts.Length == 3 => await GetChildrenAsync(parts[1], parts[2], start, limit, cancellationToken).ConfigureAwait(false),
                 _ => EmptyResult()
             };
         }
@@ -117,12 +122,18 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
 
     public async Task<IEnumerable<MediaSourceInfo>> GetChannelItemMediaInfo(string id, CancellationToken cancellationToken)
     {
-        if (!_plexClient.IsConfigured || !TryGetPlayableRatingKey(id, out var ratingKey))
+        if (!TryGetPlayableIdentity(id, out var serverId, out var ratingKey))
         {
             return Array.Empty<MediaSourceInfo>();
         }
 
-        var metadata = await _plexClient.GetMetadataAsync(ratingKey, cancellationToken).ConfigureAwait(false);
+        var server = FindServer(serverId);
+        if (server is null || !_plexClient.IsConfigured(server))
+        {
+            return Array.Empty<MediaSourceInfo>();
+        }
+
+        var metadata = await _plexClient.GetMetadataAsync(server, ratingKey, cancellationToken).ConfigureAwait(false);
         if (metadata is null)
         {
             return Array.Empty<MediaSourceInfo>();
@@ -153,10 +164,10 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
 
             var source = new MediaSourceInfo
             {
-                Id = CreateMediaSourceId(ratingKey, media.Index, 0),
+                Id = CreateMediaSourceId(server.Id, ratingKey, media.Index, 0),
                 Name = BuildMediaName(media),
                 Protocol = MediaProtocol.Http,
-                Path = _proxyTokens.CreateStreamUrl(ratingKey, media.Index, 0),
+                Path = _proxyTokens.CreateStreamUrl(server.Id, ratingKey, media.Index, 0),
                 Container = part.Container ?? media.Container,
                 Size = part.Size,
                 IsRemote = true,
@@ -258,12 +269,12 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
         return streams;
     }
 
-    private static string CreateMediaSourceId(string ratingKey, int mediaIndex, int partIndex)
+    private static string CreateMediaSourceId(string serverId, string ratingKey, int mediaIndex, int partIndex)
     {
         // Jellyfin 10.11 parses MediaSourceId as a Guid in its HLS/trickplay path.
         // Use a deterministic GUID so the same Plex version keeps the same ID across
         // callbacks while still allowing multiple Plex versions/parts per item.
-        var identity = $"plexbridge\n{ratingKey}\n{mediaIndex.ToString(CultureInfo.InvariantCulture)}\n{partIndex.ToString(CultureInfo.InvariantCulture)}";
+        var identity = $"plexbridge\n{serverId}\n{ratingKey}\n{mediaIndex.ToString(CultureInfo.InvariantCulture)}\n{partIndex.ToString(CultureInfo.InvariantCulture)}";
         var hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(identity));
         return new Guid(hash.AsSpan(0, 16)).ToString("D", CultureInfo.InvariantCulture);
     }
@@ -276,76 +287,99 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
 
     private async Task<ChannelItemResult> GetRootAsync(CancellationToken cancellationToken)
     {
-        var selected = SplitCsv(GetConfiguration().SelectedLibraryKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var libraries = await _plexClient.GetLibrariesAsync(cancellationToken).ConfigureAwait(false);
-        var items = libraries
-            .Where(library => selected.Count == 0 || selected.Contains(library.Key))
-            .Select(library => new ChannelItemInfo
+        var items = GetConfiguration().GetEffectiveServers()
+            .Where(_plexClient.IsConfigured)
+            .Select(server => new ChannelItemInfo
             {
-                Id = $"lib:{library.Type}:{library.Key}",
-                Name = library.Title,
+                Id = $"server:{server.Id}",
+                Name = string.IsNullOrWhiteSpace(server.Name) ? server.Id : server.Name,
                 Type = ChannelItemType.Folder,
                 FolderType = ChannelFolderType.Container,
-                DateModified = library.UpdatedAt ?? DateTime.UnixEpoch,
-                ImageUrl = BuildImageUrl(library.Thumb)
+                DateModified = DateTime.UnixEpoch
             })
             .ToArray();
 
         return new ChannelItemResult { Items = items, TotalRecordCount = items.Length };
     }
 
+    private async Task<ChannelItemResult> GetServerLibrariesAsync(string serverId, int start, int? limit, CancellationToken cancellationToken)
+    {
+        var server = FindServer(serverId);
+        if (server is null || !_plexClient.IsConfigured(server)) return EmptyResult();
+        var selected = SplitCsv(server.SelectedLibraryKeys).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var libraries = await _plexClient.GetLibrariesAsync(server, cancellationToken).ConfigureAwait(false);
+        var items = libraries.Where(library => selected.Count == 0 || selected.Contains(library.Key)).Select(library => new ChannelItemInfo
+        {
+            Id = $"lib:{server.Id}:{library.Type}:{library.Key}",
+            Name = library.Title,
+            Type = ChannelItemType.Folder,
+            FolderType = ChannelFolderType.Container,
+            DateModified = library.UpdatedAt ?? DateTime.UnixEpoch,
+            ImageUrl = BuildImageUrl(server, library.Thumb)
+        }).ToArray();
+        return new ChannelItemResult { Items = items, TotalRecordCount = items.Length };
+    }
+
     private async Task<ChannelItemResult> GetLibraryAsync(
+        string serverId,
         string libraryType,
         string libraryKey,
         int start,
         int? limit,
         CancellationToken cancellationToken)
     {
-        if (libraryType is not ("movie" or "show"))
+        var server = FindServer(serverId);
+        if (server is null || !_plexClient.IsConfigured(server) || libraryType is not ("movie" or "show"))
         {
             return EmptyResult();
         }
 
         if (limit.HasValue)
         {
-            var page = await _plexClient.GetLibraryItemsAsync(libraryKey, libraryType, start, limit.Value, cancellationToken).ConfigureAwait(false);
+            var page = await _plexClient.GetLibraryItemsAsync(server, libraryKey, libraryType, start, limit.Value, cancellationToken).ConfigureAwait(false);
             return new ChannelItemResult
             {
-                Items = page.Items.Select(MapItem).ToArray(),
+                Items = page.Items.Select(item => MapItem(server.Id, item)).ToArray(),
                 TotalRecordCount = page.TotalCount
             };
         }
 
         return await GetAllPagesAsync(
-            (offset, pageSize, token) => _plexClient.GetLibraryItemsAsync(libraryKey, libraryType, offset, pageSize, token),
+            (offset, pageSize, token) => _plexClient.GetLibraryItemsAsync(server, libraryKey, libraryType, offset, pageSize, token),
+            server.Id,
             start,
             cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<ChannelItemResult> GetChildrenAsync(
+        string serverId,
         string ratingKey,
         int start,
         int? limit,
         CancellationToken cancellationToken)
     {
+        var server = FindServer(serverId);
+        if (server is null || !_plexClient.IsConfigured(server)) return EmptyResult();
         if (limit.HasValue)
         {
-            var page = await _plexClient.GetChildrenAsync(ratingKey, start, limit.Value, cancellationToken).ConfigureAwait(false);
+            var page = await _plexClient.GetChildrenAsync(server, ratingKey, start, limit.Value, cancellationToken).ConfigureAwait(false);
             return new ChannelItemResult
             {
-                Items = page.Items.Select(MapItem).ToArray(),
+                Items = page.Items.Select(item => MapItem(server.Id, item)).ToArray(),
                 TotalRecordCount = page.TotalCount
             };
         }
 
         return await GetAllPagesAsync(
-            (offset, pageSize, token) => _plexClient.GetChildrenAsync(ratingKey, offset, pageSize, token),
+            (offset, pageSize, token) => _plexClient.GetChildrenAsync(server, ratingKey, offset, pageSize, token),
+            server.Id,
             start,
             cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<ChannelItemResult> GetAllPagesAsync(
         Func<int, int, CancellationToken, Task<PlexPage>> fetchPage,
+        string serverId,
         int start,
         CancellationToken cancellationToken)
     {
@@ -365,7 +399,7 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
                 break;
             }
 
-            items.AddRange(page.Items.Select(MapItem));
+            items.AddRange(page.Items.Select(item => MapItem(serverId, item)));
             offset += page.Items.Count;
 
             // Plex normally supplies totalSize. Stop when we reach it. If totalSize is
@@ -383,7 +417,7 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
         };
     }
 
-    private ChannelItemInfo MapItem(PlexItem item)
+    private ChannelItemInfo MapItem(string serverId, PlexItem item)
     {
         var type = item.Type.ToLowerInvariant();
         var result = new ChannelItemInfo
@@ -400,7 +434,7 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
             IndexNumber = item.Index,
             ParentIndexNumber = item.ParentIndex,
             SeriesName = item.GrandparentTitle ?? item.ParentTitle,
-            ImageUrl = BuildImageUrl(item.Thumb),
+            ImageUrl = BuildImageUrl(FindServer(serverId), item.Thumb),
             Genres = item.Genres.ToList(),
             Studios = string.IsNullOrWhiteSpace(item.Studio) ? new List<string>() : new List<string> { item.Studio },
             ProviderIds = item.ProviderIds.ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase),
@@ -410,29 +444,29 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
         switch (type)
         {
             case "movie":
-                result.Id = "movie:" + item.RatingKey;
+                result.Id = $"movie:{serverId}:{item.RatingKey}";
                 result.Type = ChannelItemType.Media;
                 result.MediaType = ChannelMediaType.Video;
                 result.ContentType = ChannelMediaContentType.Movie;
                 break;
             case "show":
-                result.Id = "show:" + item.RatingKey;
+                result.Id = $"show:{serverId}:{item.RatingKey}";
                 result.Type = ChannelItemType.Folder;
                 result.FolderType = ChannelFolderType.Series;
                 break;
             case "season":
-                result.Id = "season:" + item.RatingKey;
+                result.Id = $"season:{serverId}:{item.RatingKey}";
                 result.Type = ChannelItemType.Folder;
                 result.FolderType = ChannelFolderType.Season;
                 break;
             case "episode":
-                result.Id = "episode:" + item.RatingKey;
+                result.Id = $"episode:{serverId}:{item.RatingKey}";
                 result.Type = ChannelItemType.Media;
                 result.MediaType = ChannelMediaType.Video;
                 result.ContentType = ChannelMediaContentType.Episode;
                 break;
             default:
-                result.Id = "unknown:" + item.RatingKey;
+                result.Id = $"unknown:{serverId}:{item.RatingKey}";
                 result.Type = ChannelItemType.Folder;
                 result.FolderType = ChannelFolderType.Container;
                 break;
@@ -441,16 +475,16 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
         return result;
     }
 
-    private string? BuildImageUrl(string? plexPath)
+    private string? BuildImageUrl(PlexServerConfiguration? server, string? plexPath)
     {
-        if (!GetConfiguration().EnableImages || string.IsNullOrWhiteSpace(plexPath))
+        if (server is null || !GetConfiguration().EnableImages || string.IsNullOrWhiteSpace(plexPath))
         {
             return null;
         }
 
         try
         {
-            return _proxyTokens.CreateImageUrl(plexPath);
+            return _proxyTokens.CreateImageUrl(server.Id, plexPath);
         }
         catch (InvalidOperationException ex)
         {
@@ -467,24 +501,30 @@ public sealed class PlexChannel : IChannel, IRequiresMediaInfoCallback
         return string.IsNullOrWhiteSpace(name) ? "Plex" : "Plex · " + name;
     }
 
-    private static bool TryGetPlayableRatingKey(string id, out string ratingKey)
+    private bool TryGetPlayableIdentity(string id, out string serverId, out string ratingKey)
     {
+        serverId = string.Empty;
         ratingKey = string.Empty;
-        var separator = id.IndexOf(':');
-        if (separator <= 0 || separator == id.Length - 1)
+        var parts = id.Split(':', 3, StringSplitOptions.None);
+        if (parts.Length != 3)
         {
             return false;
         }
 
-        var prefix = id[..separator];
+        var prefix = parts[0];
         if (prefix is not ("movie" or "episode"))
         {
             return false;
         }
 
-        ratingKey = id[(separator + 1)..];
-        return !string.IsNullOrWhiteSpace(ratingKey);
+        serverId = parts[1];
+        ratingKey = parts[2];
+        return !string.IsNullOrWhiteSpace(serverId) && !string.IsNullOrWhiteSpace(ratingKey);
     }
+
+    private PlexServerConfiguration? FindServer(string id)
+        => GetConfiguration().GetEffectiveServers().FirstOrDefault(server =>
+            string.Equals(server.Id, id, StringComparison.OrdinalIgnoreCase));
 
     private static ChannelItemResult EmptyResult()
         => new() { Items = Array.Empty<ChannelItemInfo>(), TotalRecordCount = 0 };

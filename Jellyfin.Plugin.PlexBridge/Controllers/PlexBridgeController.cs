@@ -1,8 +1,10 @@
 using System;
 using System.Net.Http;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Plugin.PlexBridge.Services;
+using Jellyfin.Plugin.PlexBridge.Configuration;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -33,8 +35,9 @@ public sealed class PlexBridgeController : ControllerBase
     /// Proxies a Plex media part and preserves byte range semantics for seeking.
     /// </summary>
     [AcceptVerbs("GET", "HEAD")]
-    [Route("stream/{ratingKey}/{mediaIndex:int}/{partIndex:int}")]
+    [Route("stream/{serverId}/{ratingKey}/{mediaIndex:int}/{partIndex:int}")]
     public async Task Stream(
+        string serverId,
         string ratingKey,
         int mediaIndex,
         int partIndex,
@@ -42,7 +45,8 @@ public sealed class PlexBridgeController : ControllerBase
         [FromQuery] string sig,
         CancellationToken cancellationToken)
     {
-        if (!_tokens.ValidateStream(ratingKey, mediaIndex, partIndex, exp, sig))
+        var server = FindServer(serverId);
+        if (server is null || !_plexClient.IsConfigured(server) || !_tokens.ValidateStream(serverId, ratingKey, mediaIndex, partIndex, exp, sig))
         {
             Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -50,7 +54,7 @@ public sealed class PlexBridgeController : ControllerBase
 
         try
         {
-            var resolved = await _plexClient.ResolvePartAsync(ratingKey, mediaIndex, partIndex, cancellationToken).ConfigureAwait(false);
+            var resolved = await _plexClient.ResolvePartAsync(server, ratingKey, mediaIndex, partIndex, cancellationToken).ConfigureAwait(false);
             if (resolved is null)
             {
                 Response.StatusCode = StatusCodes.Status404NotFound;
@@ -59,7 +63,7 @@ public sealed class PlexBridgeController : ControllerBase
 
             var method = HttpMethods.IsHead(Request.Method) ? HttpMethod.Head : HttpMethod.Get;
             var range = Request.Headers["Range"].ToString();
-            using var upstream = await _plexClient.OpenMediaAsync(resolved.Key, method, range, cancellationToken).ConfigureAwait(false);
+            using var upstream = await _plexClient.OpenMediaAsync(server, resolved.Key, method, range, cancellationToken).ConfigureAwait(false);
 
             _logger.LogInformation(
                 "Plex Bridge stream {RatingKey}/{MediaIndex}/{PartIndex}: Plex HTTP {StatusCode}, range {Range}, type {ContentType}, length {ContentLength}",
@@ -102,12 +106,14 @@ public sealed class PlexBridgeController : ControllerBase
     /// </summary>
     [HttpGet("image")]
     public async Task Image(
+        [FromQuery(Name = "s")] string serverId,
         [FromQuery(Name = "p")] string encodedPath,
         [FromQuery] long exp,
         [FromQuery] string sig,
         CancellationToken cancellationToken)
     {
-        if (!_tokens.TryValidateImage(encodedPath, exp, sig, out var plexPath))
+        var server = FindServer(serverId);
+        if (server is null || !_plexClient.IsConfigured(server) || !_tokens.TryValidateImage(serverId, encodedPath, exp, sig, out var plexPath))
         {
             Response.StatusCode = StatusCodes.Status403Forbidden;
             return;
@@ -115,7 +121,7 @@ public sealed class PlexBridgeController : ControllerBase
 
         try
         {
-            using var upstream = await _plexClient.OpenImageAsync(plexPath, cancellationToken).ConfigureAwait(false);
+            using var upstream = await _plexClient.OpenImageAsync(server, plexPath, cancellationToken).ConfigureAwait(false);
             await RelayAsync(upstream, includeBody: true, isImage: true, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -179,4 +185,8 @@ public sealed class PlexBridgeController : ControllerBase
             Response.Headers[name] = string.Join(", ", values);
         }
     }
+
+    private static PlexServerConfiguration? FindServer(string id)
+        => Plugin.Instance?.Configuration.GetEffectiveServers().FirstOrDefault(server =>
+            string.Equals(server.Id, id, StringComparison.OrdinalIgnoreCase));
 }

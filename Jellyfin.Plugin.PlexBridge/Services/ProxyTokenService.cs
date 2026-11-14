@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
 using Jellyfin.Plugin.PlexBridge.Configuration;
@@ -15,34 +16,38 @@ public sealed class ProxyTokenService
     private const string StreamKind = "stream";
     private const string ImageKind = "image";
 
-    public string CreateStreamUrl(string ratingKey, int mediaIndex, int partIndex)
+    public string CreateStreamUrl(string serverId, string ratingKey, int mediaIndex, int partIndex)
     {
-        var resource = $"{ratingKey}:{mediaIndex}:{partIndex}";
+        var server = FindServer(serverId) ?? throw new InvalidOperationException("The configured Plex server was not found.");
+        var resource = $"{serverId}:{ratingKey}:{mediaIndex}:{partIndex}";
         var expiry = GetExpiryUnixSeconds();
-        var signature = Sign(StreamKind, resource, expiry);
+        var signature = Sign(StreamKind, resource, expiry, server.Token);
         var baseUrl = GetInternalBaseUrl();
-        return $"{baseUrl}/PlexBridge/stream/{Uri.EscapeDataString(ratingKey)}/{mediaIndex.ToString(CultureInfo.InvariantCulture)}/{partIndex.ToString(CultureInfo.InvariantCulture)}?exp={expiry.ToString(CultureInfo.InvariantCulture)}&sig={signature}";
+        return $"{baseUrl}/PlexBridge/stream/{Uri.EscapeDataString(serverId)}/{Uri.EscapeDataString(ratingKey)}/{mediaIndex.ToString(CultureInfo.InvariantCulture)}/{partIndex.ToString(CultureInfo.InvariantCulture)}?exp={expiry.ToString(CultureInfo.InvariantCulture)}&sig={signature}";
     }
 
-    public string CreateImageUrl(string plexPath)
+    public string CreateImageUrl(string serverId, string plexPath)
     {
+        var server = FindServer(serverId) ?? throw new InvalidOperationException("The configured Plex server was not found.");
         var encodedPath = Base64UrlEncode(Encoding.UTF8.GetBytes(plexPath));
         var expiry = GetExpiryUnixSeconds();
-        var signature = Sign(ImageKind, encodedPath, expiry);
+        var signature = Sign(ImageKind, $"{serverId}:{encodedPath}", expiry, server.Token);
         var baseUrl = GetInternalBaseUrl();
-        return $"{baseUrl}/PlexBridge/image?p={Uri.EscapeDataString(encodedPath)}&exp={expiry.ToString(CultureInfo.InvariantCulture)}&sig={signature}";
+        return $"{baseUrl}/PlexBridge/image?s={Uri.EscapeDataString(serverId)}&p={Uri.EscapeDataString(encodedPath)}&exp={expiry.ToString(CultureInfo.InvariantCulture)}&sig={signature}";
     }
 
-    public bool ValidateStream(string ratingKey, int mediaIndex, int partIndex, long expiry, string signature)
+    public bool ValidateStream(string serverId, string ratingKey, int mediaIndex, int partIndex, long expiry, string signature)
     {
-        var resource = $"{ratingKey}:{mediaIndex}:{partIndex}";
-        return Validate(StreamKind, resource, expiry, signature);
+        var resource = $"{serverId}:{ratingKey}:{mediaIndex}:{partIndex}";
+        var server = FindServer(serverId);
+        return server is not null && Validate(StreamKind, resource, expiry, signature, server.Token);
     }
 
-    public bool TryValidateImage(string encodedPath, long expiry, string signature, out string plexPath)
+    public bool TryValidateImage(string serverId, string encodedPath, long expiry, string signature, out string plexPath)
     {
         plexPath = string.Empty;
-        if (!Validate(ImageKind, encodedPath, expiry, signature))
+        var server = FindServer(serverId);
+        if (server is null || !Validate(ImageKind, $"{serverId}:{encodedPath}", expiry, signature, server.Token))
         {
             return false;
         }
@@ -66,7 +71,7 @@ public sealed class ProxyTokenService
             && !path.Contains("\r", StringComparison.Ordinal)
             && !path.Contains("\n", StringComparison.Ordinal);
 
-    private static bool Validate(string kind, string resource, long expiry, string signature)
+    private static bool Validate(string kind, string resource, long expiry, string signature, string token)
     {
         var now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         if (expiry < now - 60 || string.IsNullOrWhiteSpace(signature))
@@ -74,7 +79,7 @@ public sealed class ProxyTokenService
             return false;
         }
 
-        var expected = Sign(kind, resource, expiry);
+        var expected = Sign(kind, resource, expiry, token);
         try
         {
             var expectedBytes = Base64UrlDecode(expected);
@@ -88,16 +93,15 @@ public sealed class ProxyTokenService
         }
     }
 
-    private static string Sign(string kind, string resource, long expiry)
+    private static string Sign(string kind, string resource, long expiry, string token)
     {
-        using var hmac = new HMACSHA256(DeriveSigningKey());
+        using var hmac = new HMACSHA256(DeriveSigningKey(token));
         var payload = Encoding.UTF8.GetBytes($"{kind}\n{resource}\n{expiry.ToString(CultureInfo.InvariantCulture)}");
         return Base64UrlEncode(hmac.ComputeHash(payload));
     }
 
-    private static byte[] DeriveSigningKey()
+    private static byte[] DeriveSigningKey(string token)
     {
-        var token = GetConfiguration().PlexToken ?? string.Empty;
         var input = Encoding.UTF8.GetBytes(token + "|" + Plugin.PluginId.ToString("N", CultureInfo.InvariantCulture));
         return SHA256.HashData(input);
     }
@@ -118,6 +122,10 @@ public sealed class ProxyTokenService
 
         return uri.ToString().TrimEnd('/');
     }
+
+    private static PlexServerConfiguration? FindServer(string id)
+        => GetConfiguration().GetEffectiveServers().FirstOrDefault(server =>
+            string.Equals(server.Id, id, StringComparison.OrdinalIgnoreCase));
 
     private static string Base64UrlEncode(byte[] bytes)
         => Convert.ToBase64String(bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_');

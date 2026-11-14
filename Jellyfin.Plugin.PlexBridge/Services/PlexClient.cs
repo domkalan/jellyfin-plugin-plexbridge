@@ -34,19 +34,16 @@ public sealed class PlexClient
     /// Returns true when the minimum connection settings are present.
     /// </summary>
     public bool IsConfigured
-    {
-        get
-        {
-            var config = GetConfiguration();
-            return config.Enabled
-                && Uri.TryCreate(config.PlexServerUrl, UriKind.Absolute, out _)
-                && !string.IsNullOrWhiteSpace(config.PlexToken);
-        }
-    }
+        => GetConfiguration().Enabled && GetConfiguration().GetEffectiveServers().Any(IsConfigured);
 
-    public async Task<IReadOnlyList<PlexLibrary>> GetLibrariesAsync(CancellationToken cancellationToken)
+    public bool IsConfigured(PlexServerConfiguration server)
+        => server.Enabled
+            && Uri.TryCreate(server.Url, UriKind.Absolute, out _)
+            && !string.IsNullOrWhiteSpace(server.Token);
+
+    public async Task<IReadOnlyList<PlexLibrary>> GetLibrariesAsync(PlexServerConfiguration server, CancellationToken cancellationToken)
     {
-        var document = await GetXmlAsync("/library/sections", null, null, cancellationToken).ConfigureAwait(false);
+        var document = await GetXmlAsync(server, "/library/sections", null, null, cancellationToken).ConfigureAwait(false);
         return document.Root?
             .Elements("Directory")
             .Select(ParseLibrary)
@@ -56,6 +53,7 @@ public sealed class PlexClient
     }
 
     public Task<PlexPage> GetLibraryItemsAsync(
+        PlexServerConfiguration server,
         string sectionKey,
         string libraryType,
         int startIndex,
@@ -64,40 +62,42 @@ public sealed class PlexClient
     {
         var plexType = string.Equals(libraryType, "movie", StringComparison.OrdinalIgnoreCase) ? "1" : "2";
         var path = $"/library/sections/{Uri.EscapeDataString(sectionKey)}/all?type={plexType}&includeGuids=1";
-        return GetPageAsync(path, startIndex, limit, cancellationToken);
+        return GetPageAsync(server, path, startIndex, limit, cancellationToken);
     }
 
     public Task<PlexPage> GetChildrenAsync(
+        PlexServerConfiguration server,
         string ratingKey,
         int startIndex,
         int limit,
         CancellationToken cancellationToken)
     {
         var path = $"/library/metadata/{Uri.EscapeDataString(ratingKey)}/children?includeGuids=1";
-        return GetPageAsync(path, startIndex, limit, cancellationToken);
+        return GetPageAsync(server, path, startIndex, limit, cancellationToken);
     }
 
-    public async Task<PlexItem?> GetMetadataAsync(string ratingKey, CancellationToken cancellationToken)
+    public async Task<PlexItem?> GetMetadataAsync(PlexServerConfiguration server, string ratingKey, CancellationToken cancellationToken)
     {
         var path = $"/library/metadata/{Uri.EscapeDataString(ratingKey)}?includeGuids=1";
-        var document = await GetXmlAsync(path, null, null, cancellationToken).ConfigureAwait(false);
+        var document = await GetXmlAsync(server, path, null, null, cancellationToken).ConfigureAwait(false);
         var element = document.Root?.Elements().FirstOrDefault(IsMetadataElement);
         return element is null ? null : ParseItem(element);
     }
 
     public async Task<PlexResolvedPart?> ResolvePartAsync(
+        PlexServerConfiguration server,
         string ratingKey,
         int mediaIndex,
         int partIndex,
         CancellationToken cancellationToken)
     {
-        var cacheKey = $"{ratingKey}:{mediaIndex}:{partIndex}";
+        var cacheKey = $"{server.Id}:{ratingKey}:{mediaIndex}:{partIndex}";
         if (_partCache.TryGetValue(cacheKey, out var cached) && cached.ExpiresAt > DateTimeOffset.UtcNow)
         {
             return cached.Part;
         }
 
-        var metadata = await GetMetadataAsync(ratingKey, cancellationToken).ConfigureAwait(false);
+        var metadata = await GetMetadataAsync(server, ratingKey, cancellationToken).ConfigureAwait(false);
         if (metadata is null)
         {
             return null;
@@ -127,12 +127,13 @@ public sealed class PlexClient
     }
 
     public Task<HttpResponseMessage> OpenMediaAsync(
+        PlexServerConfiguration server,
         string plexPath,
         HttpMethod method,
         string? range,
         CancellationToken cancellationToken)
     {
-        var request = CreateRequest(method, plexPath);
+        var request = CreateRequest(server, method, plexPath);
         if (!string.IsNullOrWhiteSpace(range))
         {
             request.Headers.TryAddWithoutValidation("Range", range);
@@ -141,15 +142,15 @@ public sealed class PlexClient
         return _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
-    public Task<HttpResponseMessage> OpenImageAsync(string plexPath, CancellationToken cancellationToken)
+    public Task<HttpResponseMessage> OpenImageAsync(PlexServerConfiguration server, string plexPath, CancellationToken cancellationToken)
     {
-        var request = CreateRequest(HttpMethod.Get, plexPath);
+        var request = CreateRequest(server, HttpMethod.Get, plexPath);
         return _httpClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
     }
 
-    private async Task<PlexPage> GetPageAsync(string path, int startIndex, int limit, CancellationToken cancellationToken)
+    private async Task<PlexPage> GetPageAsync(PlexServerConfiguration server, string path, int startIndex, int limit, CancellationToken cancellationToken)
     {
-        var document = await GetXmlAsync(path, startIndex, limit, cancellationToken).ConfigureAwait(false);
+        var document = await GetXmlAsync(server, path, startIndex, limit, cancellationToken).ConfigureAwait(false);
         var root = document.Root;
         if (root is null)
         {
@@ -162,12 +163,13 @@ public sealed class PlexClient
     }
 
     private async Task<XDocument> GetXmlAsync(
+        PlexServerConfiguration server,
         string path,
         int? startIndex,
         int? limit,
         CancellationToken cancellationToken)
     {
-        using var request = CreateRequest(HttpMethod.Get, path);
+        using var request = CreateRequest(server, HttpMethod.Get, path);
         if (startIndex.HasValue)
         {
             request.Headers.TryAddWithoutValidation("X-Plex-Container-Start", startIndex.Value.ToString(CultureInfo.InvariantCulture));
@@ -189,15 +191,14 @@ public sealed class PlexClient
         return await XDocument.LoadAsync(stream, LoadOptions.None, cancellationToken).ConfigureAwait(false);
     }
 
-    private HttpRequestMessage CreateRequest(HttpMethod method, string path)
+    private HttpRequestMessage CreateRequest(PlexServerConfiguration server, HttpMethod method, string path)
     {
-        var config = GetConfiguration();
-        if (!Uri.TryCreate(config.PlexServerUrl, UriKind.Absolute, out var baseUri))
+        if (!Uri.TryCreate(server.Url, UriKind.Absolute, out var baseUri))
         {
             throw new InvalidOperationException("Plex Bridge is not configured with a valid Plex server URL.");
         }
 
-        if (string.IsNullOrWhiteSpace(config.PlexToken))
+        if (string.IsNullOrWhiteSpace(server.Token))
         {
             throw new InvalidOperationException("Plex Bridge is not configured with a Plex token.");
         }
@@ -207,7 +208,7 @@ public sealed class PlexClient
         var uri = new Uri(normalizedBase + normalizedPath, UriKind.Absolute);
         var request = new HttpRequestMessage(method, uri);
         request.Headers.TryAddWithoutValidation("Accept", "application/xml,*/*;q=0.8");
-        request.Headers.TryAddWithoutValidation("X-Plex-Token", config.PlexToken);
+        request.Headers.TryAddWithoutValidation("X-Plex-Token", server.Token);
         request.Headers.TryAddWithoutValidation("X-Plex-Client-Identifier", ClientIdentifier);
         request.Headers.TryAddWithoutValidation("X-Plex-Product", "Jellyfin Plex Bridge");
         request.Headers.TryAddWithoutValidation("X-Plex-Version", typeof(PlexClient).Assembly.GetName().Version?.ToString() ?? "unknown");

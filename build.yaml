@@ -1,7 +1,7 @@
 ---
 name: "Plex Bridge"
 guid: "978ac9fe-8d18-4d26-a432-0d3150143c98"
-version: "1.0.3.0"
+version: "1.1.0.0"
 targetAbi: "10.11.11.0"
 framework: "net9.0"
 owner: "Plex Bridge contributors"

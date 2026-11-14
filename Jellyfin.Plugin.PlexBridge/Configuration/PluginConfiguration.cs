@@ -7,6 +7,9 @@ namespace Jellyfin.Plugin.PlexBridge.Configuration;
 /// </summary>
 public sealed class PluginConfiguration : BasePluginConfiguration
 {
+    /// <summary>Gets or sets the configured Plex servers.</summary>
+    public System.Collections.Generic.List<PlexServerConfiguration> Servers { get; set; } = new();
+
     /// <summary>
     /// Gets or sets a value indicating whether the channel is enabled.
     /// </summary>
@@ -54,4 +57,31 @@ public sealed class PluginConfiguration : BasePluginConfiguration
     /// Gets or sets the signed media URL lifetime in minutes.
     /// </summary>
     public int SignedUrlLifetimeMinutes { get; set; } = 1440;
+
+    /// <summary>Returns configured servers, including a legacy single-server migration view.</summary>
+    public System.Collections.Generic.IReadOnlyList<PlexServerConfiguration> GetEffectiveServers()
+    {
+        if (Servers.Count > 0)
+        {
+            return Servers;
+        }
+
+        if (string.IsNullOrWhiteSpace(PlexServerUrl) || string.IsNullOrWhiteSpace(PlexToken))
+        {
+            return System.Array.Empty<PlexServerConfiguration>();
+        }
+
+        return new[]
+        {
+            new PlexServerConfiguration
+            {
+                Id = "legacy",
+                Name = "Plex Server",
+                Url = PlexServerUrl,
+                Token = PlexToken,
+                Enabled = Enabled,
+                SelectedLibraryKeys = SelectedLibraryKeys
+            }
+        };
+    }
 }
