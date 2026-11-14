@@ -8,6 +8,14 @@
     "category": "Channels",
     "versions": [
       {
+        "version": "1.1.0.0",
+        "changelog": "- Rename the channel root to `Plex Libraries`.\n- Add multiple configured Plex servers beneath the channel root.\n- Scope library browsing, metadata, caches, artwork proxying, media IDs, and signed playback URLs to the selected server.\n- Preserve the previous single-server configuration as a migration fallback.\n- Add optional per-server Plex playback timeline reporting.",
+        "targetAbi": "10.11.11.0",
+        "sourceUrl": "https://github.com/domkalan/jellyfin-plugin-plexbridge/releases/download/v1.1.0/PlexBridge-1.1.0-jellyfin-10.11.11.zip",
+        "checksum": "290406611c84ce3c95c2b0b986f383f9",
+        "timestamp": "2026-11-14T19:23:30Z"
+      },
+      {
         "version": "1.0.3.0",
         "changelog": "- Map Plex elementary video, audio, and embedded subtitle metadata into Jellyfin `MediaStream` entries.\n- Add conservative fallback video/audio descriptors when Plex omits detailed stream metadata.\n- Log upstream Plex HTTP status, range, content type, and content length for media proxy requests.\n- Bump the Channel data version so stale media metadata is refreshed.",
         "targetAbi": "10.11.11.0",
