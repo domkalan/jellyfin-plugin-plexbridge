@@ -67,16 +67,17 @@ public sealed class PlexPlaybackReporter : IHostedService
         }
         finally
         {
-            if (!string.IsNullOrWhiteSpace(eventArgs.SessionId))
+            var sessionKey = GetSessionKey(eventArgs.PlaySessionId, eventArgs.Session?.Id);
+            if (!string.IsNullOrWhiteSpace(sessionKey))
             {
-                _lastReports.TryRemove(eventArgs.SessionId, out _);
+                _lastReports.TryRemove(sessionKey, out _);
             }
         }
     }
 
     private async Task ReportAsync(PlaybackProgressEventArgs eventArgs, string state, bool force)
     {
-        if (!TryGetPlayback(eventArgs.MediaSource?.Path, eventArgs.SessionId, eventArgs.Item?.RunTimeTicks, eventArgs.PlaybackPositionTicks, out var context))
+        if (!TryGetPlayback(eventArgs.Item?.ExternalId, GetSessionKey(eventArgs.PlaySessionId, eventArgs.Session?.Id), eventArgs.Item?.RunTimeTicks, eventArgs.PlaybackPositionTicks, out var context))
         {
             return;
         }
@@ -86,7 +87,7 @@ public sealed class PlexPlaybackReporter : IHostedService
 
     private async Task ReportAsync(PlaybackStopEventArgs eventArgs, string state, bool force)
     {
-        if (!TryGetPlayback(eventArgs.MediaSource?.Path, eventArgs.SessionId, eventArgs.Item?.RunTimeTicks, eventArgs.PlaybackPositionTicks, out var context))
+        if (!TryGetPlayback(eventArgs.Item?.ExternalId, GetSessionKey(eventArgs.PlaySessionId, eventArgs.Session?.Id), eventArgs.Item?.RunTimeTicks, eventArgs.PlaybackPositionTicks, out var context))
         {
             return;
         }
@@ -136,32 +137,26 @@ public sealed class PlexPlaybackReporter : IHostedService
     }
 
     private static bool TryGetPlayback(
-        string? mediaPath,
+        string? externalId,
         string? sessionId,
         long? runtimeTicks,
         long? positionTicks,
         out PlaybackContext context)
     {
         context = default;
-        if (string.IsNullOrWhiteSpace(mediaPath) || string.IsNullOrWhiteSpace(sessionId))
+        if (string.IsNullOrWhiteSpace(externalId) || string.IsNullOrWhiteSpace(sessionId))
         {
             return false;
         }
 
-        if (!Uri.TryCreate(mediaPath, UriKind.Absolute, out var uri))
+        var parts = externalId.Split(':', 3, StringSplitOptions.None);
+        if (parts.Length != 3 || parts[0] is not ("movie" or "episode"))
         {
             return false;
         }
 
-        var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        var streamIndex = Array.FindIndex(segments, value => string.Equals(value, "stream", StringComparison.OrdinalIgnoreCase));
-        if (streamIndex < 0 || segments.Length <= streamIndex + 2)
-        {
-            return false;
-        }
-
-        var serverId = Uri.UnescapeDataString(segments[streamIndex + 1]);
-        var ratingKey = Uri.UnescapeDataString(segments[streamIndex + 2]);
+        var serverId = parts[1];
+        var ratingKey = parts[2];
         if (string.IsNullOrWhiteSpace(serverId) || string.IsNullOrWhiteSpace(ratingKey))
         {
             return false;
@@ -175,6 +170,9 @@ public sealed class PlexPlaybackReporter : IHostedService
             Math.Max(0, (runtimeTicks ?? 0) / TimeSpan.TicksPerMillisecond));
         return true;
     }
+
+    private static string? GetSessionKey(string? playSessionId, string? sessionId)
+        => !string.IsNullOrWhiteSpace(playSessionId) ? playSessionId : sessionId;
 
     private static PluginConfiguration GetConfiguration()
         => Plugin.Instance?.Configuration ?? new PluginConfiguration();

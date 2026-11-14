@@ -30,12 +30,6 @@ public sealed class PlexClient
         _logger = logger;
     }
 
-    /// <summary>
-    /// Returns true when the minimum connection settings are present.
-    /// </summary>
-    public bool IsConfigured
-        => GetConfiguration().Enabled && GetConfiguration().GetEffectiveServers().Any(IsConfigured);
-
     public bool IsConfigured(PlexServerConfiguration server)
         => server.Enabled
             && Uri.TryCreate(server.Url, UriKind.Absolute, out _)
@@ -428,9 +422,6 @@ public sealed class PlexClient
             return null;
         }
     }
-
-    private static PluginConfiguration GetConfiguration()
-        => Plugin.Instance?.Configuration ?? new PluginConfiguration();
 
     private sealed record ResolvedCacheEntry(PlexResolvedPart Part, DateTimeOffset ExpiresAt);
 }
